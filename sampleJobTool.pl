@@ -27,10 +27,9 @@ use XppTool;
 #  GLOBALS
 #=============================================================
 my $BG = 0;									#background flag
-my $DebugLevel = 9;							#message debug level
-my $SEP = "=" x 50;                         #big separator for messages
-my $Sep = "-" x 50;                         #small separator for messages
-my $SepError = "*" x 50;                    #sep for error messages
+my $DebugLevel;								#message debug level
+my $StartTag;								#start tag of book file
+my $EndTag;									#end tag of book file
 #=============================================================
 #  RegEx PATTERN SETUP
 #=============================================================
@@ -70,8 +69,7 @@ if ($BG) {
 	preFlight();
 	#inputfile?
 	$M->updateInputEntry($M->inputFile()) if ($M->inputFile());
-
-	#start wait: see tkOnStart for the real action
+	#start wait: see tkOnStart in GuiTool.pm for the real action
 	MainLoop;
 }
 
@@ -83,16 +81,12 @@ if ($BG) {
 sub badExit {
 #-------------------------------------------------------------
 	my ($mesg) = @_;
+	my $SepError = "*" x 50;
     #message
     message("$SepError\nERROR:\n\t$mesg\n\tprogram stops\n$SepError\n", 0);
-    
     #in foreground, open dialogbox
     my $winMesg = "Unexpected End of Program\n\n$mesg\n\nProgram stops\n";
     $M->tkMessagebox($winMesg) unless ($BG);
-    
-    #stop the log (if any) 
-    $M->logEnd("$SEP\n${winMesg}$SEP");
-    
     #this is the end (on a bad note)
     exit(-1);       
 }
@@ -123,79 +117,98 @@ sub checkCmdLine {
 		$file = canonpath($file);
 		badExit("input file <$file> is not readable") unless (-r $file);
 		$M->inputFile($file);
-	}
-	
+	}	
 	return();
 }
 
+#compose list of divs
+#-------------------------------------------------------------
+sub composeDivs {
+#-------------------------------------------------------------
+	my @divs = @_;
+	message(">composing divs {\n", 1);
+	foreach my $div (@divs) {
+		message(" -$div:\n", 5);
+		$X->div($div);
+		$X->divCompose();
+	}
+	message("}\n", 5);
+	return();
+}
+#chunk input file and toxsf chunks in divs
+#returns a list of div names
 #-------------------------------------------------------------
 sub createDivs {
 #-------------------------------------------------------------
-	my $filepath = shift;
+	my $fileInpath = shift;
+	my $fileChunk = "in.xml";
 	my @divs;
-	message(">reading input file\n", 5);
-	my $file = path($filepath);
-	my $content = $file->slurp_utf8();
+	message(">reading input file {\n", 1);
+	my $fileIn = path($fileInpath);
+	my $content = $fileIn->slurp_utf8();
 	my $split = '<h1';
 	#split this file
 	my @chunks = split(/$split/, $content);
 	#first chunk is <book> tag
-	my $startTag = shift @chunks;
-	chomp $startTag;
-	my $endTag = $startTag;
-	$endTag =~ s#<#</#;
-	message(" document root tag: $startTag\n", 7);
+	$StartTag = shift @chunks;
+	$StartTag =~ s#\s+$##s;
+	$EndTag = $StartTag;
+	$EndTag =~ s#<#</#;
+	message(" document root tag: $StartTag\n", 7);
 	#wrap other chunks, get title, create division
+	my $first = 1;
 	foreach my $chunk (@chunks) {
-		$chunk = $startTag . $split . $chunk . $endTag;
+		#remove endtag from last chunk
+		$chunk =~ s#$EndTag\s*$##s;
+		$chunk = $StartTag . $split . $chunk . $EndTag;
 		my ($div) = ($chunk =~ m#<h1>(.+?)</h1>#);
 		$div =~ s#\s+#_#gs;
-		message("-division: $div\n", 5);
 		push @divs, $div;
-		#create div
-		$X->source($X->div("master"));
-		$X->target($X->div($div));
-		$X->divCopy();
+		#set div
+		my $divPath = $X->div($div);
+		if ($X->divExists()) {
+			badExit("$div in use") if ($X->divUse());
+			message(" -overwrite: $div\n", 5);
+		} else {
+			message(" -create: $div\n", 5);
+			#create div
+			$X->source($X->div("master"));
+			$X->target($X->div($div));
+			$X->divCopy();
+		}
+		#set division ticket to cont or 1
+		if ($first) {
+			$X->divTicket('-p_four 1');
+		} else {
+			$X->divTicket('-p_four 65535');
+		}
 		#write out chunk
-		
+		my $file = path($divPath, $fileChunk);
+		$file->spew_utf8($chunk);
+		#toxsf
+		$X->source($fileChunk);
+		$X->divToxsf();
+		#reset first flag
+		$first = 0;
 	}
-	
-
+	message("}\n", 5);
 	return(@divs);
 }
-#
+
+#create the DA ticket needed for composing
 #-------------------------------------------------------------
 sub createDA {
 #-------------------------------------------------------------
-	my $daFile = "da.xml";
-	my @divs;
-	#remove existing da ticket
-	my $daticket = catfile($X->job(), '_da_job.sde');
-	unlink $daticket if (-e $daticket);
-	open my $da, ">", catfile($X->job(),$daFile) or badExit("could not open temp file: $daFile");
-	message(">creating DA ticket");
-	say $da '<?xml version="1.0"?>';
-	say $da '<file  type="da">';
-	say $da '<table>';
-	say $da '<_std_comment>created by jobtool: creaDA</_std_comment>';
-	foreach my $div (@divs) {
-		$div =~ s#DIV_##;
-		say $da '<rule>';
-		say $da "<divname>$div</divname>";
-		say $da '<divtype>main</divtype>';
-		say $da '<citi_active>yes</citi_active>';
-		say $da '<comp_active>yes</comp_active>';
-		say $da '<prnt_active>yes</prnt_active>';
-		say $da '<pdf_active>yes</pdf_active>';
-		say $da '<edg_active>no</edg_active>';
-		say $da '</rule>';
-		message("  $div");
-	}	
-	say $da '</table></file>';
-	close $da;
-	$X->DAcreate($daFile);
+	my @divs = @_;
+	my $cnt = scalar(@divs);
+	message(">creating DA ticket {\n", 1);
+	message(" $cnt divisions", 7);
+	$X->DACreate(@divs);
+	message("}\n", 5);
+	return();
 }
-#give back $now structure
+
+#return $now structure
 #-------------------------------------------------------------
 sub dateTime {
 #-------------------------------------------------------------
@@ -218,34 +231,71 @@ sub dateTime {
     $sec = sprintf("%02d",$sec);
     $day = sprintf("%02d",$day);
     $year= 1900 + $year;
-    
-    #store the different forms
+    #store the different formats
     $now->{'date'} = "$day-$month-$year";
     $now->{'dateNr'} = "$year-$monthNr-$day";
     $now->{'time'} = "$hour:$min:$sec";
     $now->{'timeStamp'} = "$year$monthNr$day$hour$min$sec";
-    
     #return the 'now' structure
     return($now);       
 }
 
+#the main program
 #-------------------------------------------------------------
 sub executeRun {
 #-------------------------------------------------------------
 	my $file = $M->inputFile();
-	my @divs;
 	onStart($file);
-	@divs = createDivs($file);
-
+	my @divs = createDivs($file);
+	createDA(@divs);
+	composeDivs(@divs);
+	exportDivs(@divs);
 	onEnd();
 	return();
 }
+
+#export+transform list of divs and concatenate
+#-------------------------------------------------------------
+sub exportDivs {
+#-------------------------------------------------------------
+	my @divs = @_;
+	my $fileFromxsf = "fromxsf.xml";
+	my $fileTransform = "transform.xml";
+	my $fileFinal = "book.xml";
+	my $content;
+	my $file;
+	message(">exporting divs {\n", 1);
+	foreach my $div (@divs) {
+		message(" -$div\n");
+		message("   fromxsf:\n", 5);
+		$X->div($div);
+		$X->target($fileFromxsf);
+		$X->divFromxsf('-Rep -utf8');
+		message("   xychange:\n", 5);
+		$X->source($X->target());
+		$X->target($fileTransform);
+		$X->tables('transform');
+		$X->divXychange();
+		$file = path($X->div(), $fileTransform);
+		$content .= $file->slurp_utf8(); 
+	}
+	message("}\n", 5);
+	#write out book file
+	$file = path($X->job(), $fileFinal);
+	message(">writing book file\n", 1);
+	message(" $file\n", 5);
+	$file->spew_utf8($StartTag, $content, $EndTag);
+	return();
+}
+
 #-------------------------------------------------------------
 sub message {
 #-------------------------------------------------------------
 	my $mesg = shift;
 	my $level = shift || 5;
+	$mesg =~ s#{## if ($DebugLevel < 5);
 	if ($level <= $DebugLevel) {
+		$mesg =~ s#{## if ($DebugLevel < 5);
 		$M->message($mesg);
 		$X->log($mesg);
 		print $mesg;
@@ -253,23 +303,26 @@ sub message {
 	return();
 }
 
+#things to do before we start
 #-------------------------------------------------------------
 sub onStart {
 #-------------------------------------------------------------
 	my $file = shift;
 	my $now = dateTime();
+	my $Sep = "-" x 50;
 	message("$Sep\n", 1);
 	message(" " . $now->{'date'} . " " . $now->{'time'} . "\n", 1);
 	message(">inputfile: $file\n", 1);
 	return();
 }
 
-
+#things to do when we end
 #-------------------------------------------------------------
 sub onEnd {
 #-------------------------------------------------------------
 	$M->setProgress("All Done");
 	my $now = dateTime();
+	my $Sep = "-" x 50;
 	message("$Sep\n", 1);
 	message(">All Done\n", 1);
 	message(" " . $now->{'date'} . " " . $now->{'time'} . "\n", 1);
@@ -286,7 +339,7 @@ sub preFlight {
 	$X->logStart($logFile);
 
     #set debuglevel
-    unless ($DebugLevel) {
+    unless (defined $DebugLevel) {
 		#set to default value or set to value set in config file 
 		$DebugLevel = 5;
 		$DebugLevel = $X->config->{'general'}->{'debug'} if (exists $X->config->{'general'}->{'debug'});

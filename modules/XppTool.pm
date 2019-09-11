@@ -79,6 +79,11 @@ has 'source' => (
 	is  => 'rw',
 	isa => 'Str',
 	);
+#transformation tables string
+has 'tables' => (
+	is  => 'rw',
+	isa => 'Str',
+	);
 #target (result) file for xpp command
 has 'target' => (
 	is  => 'rw',
@@ -155,18 +160,58 @@ sub _readConfig {
 #=============================================================
 #  Methods
 #=============================================================
+#create DA ticket for given list of divs 
+#-------------------------------------------------------------
+sub DACreate {
+#-------------------------------------------------------------
+	my $self = shift;
+	my @divs = @_;
+	my $file = "da.xml";
+	my $command = "sdedit";
+	my $job = $self->job() || $self->error("can not run $command, job not set");
+	my $options = "-cd $job da job -xsh -ain $file";
+	#remove existing da ticket
+	my $daticket = catfile($job, '_da_job.sde');
+	unlink $daticket if (-e $daticket);
+	open my $da, ">", catfile($job, $file) or badExit("could not open temp file: $file");
+	say $da '<?xml version="1.0"?>';
+	say $da '<file  type="da">';
+	say $da '<table>';
+	say $da '<_std_comment>created by jobtool: creaDA</_std_comment>';
+	foreach my $div (@divs) {
+		$div = basename($div);
+		$div =~ s#DIV_##;
+		say $da '<rule>';
+		say $da "<divname>$div</divname>";
+		say $da '<divtype>main</divtype>';
+		say $da '<citi_active>yes</citi_active>';
+		say $da '<comp_active>yes</comp_active>';
+		say $da '<prnt_active>yes</prnt_active>';
+		say $da '<pdf_active>yes</pdf_active>';
+		say $da '<edg_active>no</edg_active>';
+		say $da '</rule>';
+		$self->message("  adding $div\n", 7);
+	}	
+	say $da '</table></file>';
+	close $da;
+    #run sdedit
+	my $status = $self->_xppCommand($command, $options); 
+    if ($status) { $self->error("$command failed\n\treturned status <$status>, expected 0"); };
+	return();
+}
+
 #list all divs in DA ticket that have the specified field set to yes
 #-------------------------------------------------------------
 sub DAlist {
 #-------------------------------------------------------------
 	my $self = shift;
 	my $field = shift || 'edg';
-	my $job = $self->job();
+	my $command = "sdedit";
+	my $job = $self->job() || $self->error("can not run $command, job not set");
+	my $options = "-cd $job da job -xsh -job -xml -aout -";
 	my @divs;
 	$self->error("field <$field> is not a valid DA ticket field") unless grep /^$field$/, qw(comp loep prnt spel pdf edg);
-	my $command = "sdedit";
-	my $options = "-cd $job da job -job -xml -aout -";
-	$self->message("  -reading DA using <$field> field", 5);
+	$self->message("  -reading DA using <$field> field\n", 7);
 	my $daLines = $self->_xppCommandReadAsString($command, $options);
 	#get rid of the header - not strictly necessary but still
 	$daLines =~ s#^.+?<rule#<rule#s;
@@ -199,7 +244,7 @@ sub divCopy {
 	my $command = "copydiv";
 	my $divSource = $self->source() || $self->error("can not run $command, source division not set");
 	my $divResult = $self->target() || $self->error("can not run $command, target division not set");
-    my $status = $self->_xppCommand($command,  "$divSource $divResult");
+    my $status = $self->_xppCommand($command,  "$divSource $divResult -xsh");
     if ($status) { $self->error("$command failed\n\treturned status <$status>, expected 0"); };
 	return();
 }
@@ -220,7 +265,7 @@ sub divFromxsf {
 	my $command = "fromxsf";
 	my $div = $self->div() || $self->error("can not run $command, division not set");
 	my $file = $self->target() || $self->error("can not run $command, target file not set");
-    my $status = $self->_xppCommand($command,  "$file -cd $div $options");
+    my $status = $self->_xppCommand($command,  "$file -cd $div -xsh $options");
     if ($status == 255) { $self->error("$command failed\n\treturned status <$status>, expected 0"); };
 	return();
 }
@@ -234,20 +279,26 @@ sub divPdf {
 	my $command = "psfmtdrv";
 	my $div = $self->div() || $self->error("can not run $command, division not set");
 	my $file = $self->target() || $self->error("can not run $command, target file not set");
-    #read options from print profile file
-	if ($options eq "profile") {
-		my $profile = $self->config->{'xpp'}->{'printProfile'} || $self->error("printProfile not set in config file, cannot print");
-		$options = $self->_xppReadPrinterProfile($profile);
-	}
 	#add the name of ps/pdf file
 	$options .= " -pn $name" if ($name);
-	$self->message("  with options: $options", 5);
+	$self->message("  with options: $options\n", 5);
 	#run
-	my $status = $self->_xppCommand($command,  "-cd $div $options");
+	my $status = $self->_xppCommand($command,  "-cd $div -xsh $options");
     if ($status) { $self->error("$command failed\n\treturned status <$status>, expected 0"); };
 	return();
 }
 
+#-------------------------------------------------------------
+sub divTicket {
+#-------------------------------------------------------------
+	my $self = shift;
+	my $options = shift || $self->config->{'xpp'}->{'divticket'} || "";
+	my $command = "update_dt";
+	my $div = $self->div() || $self->error("can not run $command, division not set");
+    my $status = $self->_xppCommand($command,  "-cd $div $options");
+    if ($status) { $self->error("$command failed\n\treturned status <$status>, expected 0"); };
+	return();
+}
 #-------------------------------------------------------------
 sub divToxsf {
 #-------------------------------------------------------------
@@ -255,8 +306,8 @@ sub divToxsf {
 	my $options = shift || $self->config->{'xpp'}->{'toxsf'} || "";
 	my $command = "toxsf";
 	my $div = $self->div() || $self->error("can not run $command, division not set");
-	my $file = $self->target() || $self->error("can not run $command, target file not set");
-    my $status = $self->_xppCommand($command,  "$file -cd $div $options");
+	my $file = $self->source() || $self->error("can not run $command, source file not set");
+    my $status = $self->_xppCommand($command,  "$file -cd $div -xsh $options");
     if ($status == 255) { $self->error("$command failed\n\treturned status <$status>, expected 0"); };
 	return();
 }
@@ -265,9 +316,10 @@ sub divToxsf {
 sub divUse {
 #-------------------------------------------------------------
 	my $self = shift;
+	my $options = shift || $self->config->{'xpp'}->{'divuse'} || "";
 	my $command = "divuse";
 	my $div = shift || $self->div() || $self->error("can not run $command, division not set");
-	my $status = $self->_xppCommand($command);
+	my $status = $self->_xppCommand($command, "-cd $div -xsh $options");
 	return($status);
 }
 
@@ -280,11 +332,36 @@ sub divXml {
 	my $div = $self->div() || $self->error("can not run divxml, division not set");
 	my $file = $self->target() || $self->error("can not run divxml, target file not set");
 	my $command = "divxml";
-    my $status = $self->_xppCommand($command,  "-cd $div $options $file");
+    my $status = $self->_xppCommand($command,  "-cd $div -xsh $options $file");
     
     if ($status > 250) { $self->error("$command failed\n\treturned status <$status>, expected 0"); };
-    $self->message("  divxml run with warnings", 5) if ($status);
-    $self->message("  result in $file", 7);
+    $self->message("  divxml run with warnings\n", 5) if ($status);
+    $self->message("  result in $file\n", 7);
+	return();
+}
+
+#do a xychange at the div level
+#-------------------------------------------------------------
+sub divXychange {
+#-------------------------------------------------------------
+	my $self = shift;
+	my $options = shift || $self->config->{'xpp'}->{'xychange'} || "";
+	my $tables = $self->tables() || "";
+	my $div = $self->div() || $self->error("can not run xychange, division not set");
+	my $fileIn = $self->source() || $self->error("can not run xychange, source file not set");
+	my $fileOut = $self->target() || $self->error("can not run xychange, target file not set");
+	my $command = "xychange";
+
+    my $status = $self->_xppCommand($command,  "-cd $div $options $tables $fileIn $fileOut");
+
+    $self->error("Xychange conversion failed\n\treturned status <$status>, expected 0") if ($status > 100);
+    if ($status == 99) {
+        #need to copy inputfile as if xychange had been running
+        $self->message("\tcopied inputfile\n", 7);
+        copy( $fileIn, $fileOut );
+    }
+    $self->message("  xychange run with warnings\n", 5) if ($status);
+    $self->message("  result in $fileOut\n", 7);
 	return();
 }
 
@@ -448,30 +525,6 @@ sub updateJobTicket {
 	elsif ($status > 0) {$self->error("Update Job Ticket failed\nerror");}
 	return();
 }
-#do a xychange
-#-------------------------------------------------------------
-sub xychange {
-#-------------------------------------------------------------
-	my $self = shift;
-	my $options = shift || "";
-	my $tables = $self->tables() || "";
-	my $div = $self->div() || $self->error("can not run xychange, division not set");
-	my $fileIn = $self->source() || $self->error("can not run xychange, source file not set");
-	my $fileOut = $self->target() || $self->error("can not run xychange, target file not set");
-	my $command = "xychange";
-
-    my $status = $self->_xppCommand($command,  "-cd $div $options $tables $fileIn $fileOut");
-
-    $self->error("Xychange conversion failed\n\treturned status <$status>, expected 0") if ($status > 100);
-    if ($status == 99) {
-        #need to copy inputfile as if xychange had been running
-        $self->message("\tcopied inputfile");
-        copy( $fileIn, $fileOut );
-    }
-    $self->message("  xychange run with warnings", 5) if ($status);
-    $self->message("  result in $fileOut", 7);
-	return();
-}
 
 #=============================================================
 #  Private Methods
@@ -500,14 +553,13 @@ sub _xppCommand {
     while (<$xycom>) {
         chomp;
         $page = 0;
-        #if $self->message comes Error in it, print all the information!
         if (m#Error#i) {
-            $self->message("\t$_",1) ;    
+            $self->message("\t$_",9) ;    
         } else {
             #log only selected $self->messages
-            $self->message("\t$_", 5) if (/Character Conversion/);              #import
-            $self->message("\t$_", 5) if (/Running Xychange/);                  #import
-            $self->message("\t$_", 5) if (/Converting to XSF/);                 #import
+            $self->message("\t$_\n", 5) if (/Character Conversion/);              #import
+            $self->message("\t$_\n", 5) if (/Running Xychange/);                  #import
+            $self->message("\t$_\n", 5) if (/Converting to XSF/);                 #import
             $self->message("\n\t$_ ", 5) if (/Re-Processing Frills/);             #compose
             if (/Output set 1 page 1 total pages 1/) {                  #psfmt
                 $self->message("\n\tOutput:", 5);
@@ -534,36 +586,41 @@ sub _xppCommand {
                 $self->message("$1 ", 5);
                 $page = 1;
             }       
-            $self->message("$1 entities", 5) if (/There were (\d+) Entities found/);    #Fromxsf
-            $self->message("\t$1 using " . basename($2), 5) if (/^(Pass \d+), Transformation table: (.+)/);                      #Xychange
-            $self->message("\t$_", 5) if (/PID=/);                              #Divuse
-            if (/^Transformed (\d+) bytes/) {
+            if (/There were (\d+) Entities found/) {
+				$self->message("$1 entities\n", 5) ;    #Fromxsf
+			} elsif ((/^(Pass \d+), Transformation table: (.+)/)) {
+				$self->message("\t$1 using " . basename($2) . "\n", 5); #Xychange
+			} elsif (/PID=/) {
+				$self->message("\t$_\n", 5);								#divuse
+			} elsif (/^Transformed (\d+) bytes/) {
                 if ($1 =~ /000$/) {
                     $self->message(".", 5);
                 } else {
-                    $self->message("\n\t>$1 bytes", 5);
+                    $self->message("\n\t>$1 bytes\n", 5);
                 }
-            }
-            $self->message("\t$_", 5) if (/ERROR:/ && ! /ERROR: Cannot find page/ && $command !~ /compose/i);   #import
-            $self->message("\t$_", 5) if (/Distiller failed: /);                #psfmt
-            #not really an error
-            if (/No transformation tables specified in job ticket/) {
-                $self->message("\t$_", 5);
+            } elsif (/ERROR:/ && ! /ERROR: Cannot find page/ && $command !~ /compose/i) {
+				$self->message("\t$_\n", 5)
+			} elsif (/Distiller failed: /)	{
+				$self->message("\t$_\n", 5);                				#psfmt
+            } elsif (/No transformation tables specified in job ticket/) {
+                $self->message("\t$_\n", 5);
                 $oldfh = select STDOUT; $| = 0; select $oldfh;
                 close $xycom;
                 return(99);
-            }    
+            } else {
+				#log all messages
+				$self->message("\t$_\n",9) unless ($page);    
+			}
             #check if right margin is overflow, insert return if yes
             if ($cntPages && $page) {
                 $cntPages++;
                 if ($cntPages > 10) {
                     $cntPages = 1;
                     $self->message("\n\t", 5);    
-                }   
+                }
+				$page = 0;
             }
         } 
-        #log all messages
-        $self->message("\t$_",9);    
     }
     
     #restore old state
