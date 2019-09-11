@@ -1,6 +1,10 @@
 # XPP-powertools
 ## What is this?
-modules for easy creation of XPP job, div or any other tool
+In the **modules** folder, you will find 2 modules for the easy creation of XPP job, div or any other tool
+
+The _sampleJobTool.pl_ is a sample demonstrating the use of these modules to create a jobtool.
+The _JOB_sampleTool.zip_ is a zip containing a demo job to try out the _sampleJobTool.pl_. 
+To run the sample tool, start the tool and select or drop the _t-input.xml_
 
 ## Authors
 
