@@ -7,7 +7,7 @@ use strict;
 use warnings;
 use 5.010;
 
-#use Data::Dumper;        
+use Data::Dumper;        
 use FindBin;
 use File::Basename;
 use File::Copy;
@@ -52,7 +52,7 @@ badExit('This machine is not set up to run XPP software') unless (exists $ENV{'X
 my $M = GuiTool->new(fileselect=>1);
 #set up the xpp object - will also read in the config file
 my $X = XppTool->new(version=> $Version, hasConfig=>0);
-#make config available to the jobtool
+#make xpptool available to the jobtool
 $M->xpp($X);
 
 
@@ -67,8 +67,6 @@ if ($BG) {
 	$M->startMain();
 	#check things before we can start
 	preFlight();
-	#inputfile?
-	$M->updateInputEntry($M->inputFile()) if ($M->inputFile());
 	#start wait: see tkOnStart in GuiTool.pm for the real action
 	MainLoop;
 }
@@ -97,7 +95,7 @@ sub checkCmdLine {
 #-------------------------------------------------------------
 	my $file;
 	#check1
-	GetOptions('debug=i' => \$DebugLevel, 'bg' => \$BG, 'in=s' => \$file) or printUsage();
+	GetOptions('debug=i' => \$DebugLevel, 'bg' => \$BG) or printUsage();
 	my $noa = scalar(@ARGV);
 	printUsage() if ($noa != 1);
 	#check2
@@ -112,99 +110,6 @@ sub checkCmdLine {
 	$M->setLabel($X->job());
 	badExit("You need to start this tool on an XPP JOB") unless ($M->has_joblabel());
 	badExit("Job: " . $X->job() . "does not exist") unless (-d $X->job());
-	#set file?
-	if ($file) {
-		$file = canonpath($file);
-		badExit("input file <$file> is not readable") unless (-r $file);
-		$M->inputFile($file);
-	}	
-	return();
-}
-
-#compose list of divs
-#-------------------------------------------------------------
-sub composeDivs {
-#-------------------------------------------------------------
-	my @divs = @_;
-	message(">composing divs {\n", 1);
-	foreach my $div (@divs) {
-		message(" -$div:\n", 5);
-		$X->div($div);
-		$X->divCompose();
-	}
-	message("}\n", 5);
-	return();
-}
-#chunk input file and toxsf chunks in divs
-#returns a list of div names
-#-------------------------------------------------------------
-sub createDivs {
-#-------------------------------------------------------------
-	my $fileInpath = shift;
-	my $fileChunk = "in.xml";
-	my @divs;
-	message(">reading input file {\n", 1);
-	my $fileIn = path($fileInpath);
-	my $content = $fileIn->slurp_utf8();
-	my $split = '<h1';
-	#split this file
-	my @chunks = split(/$split/, $content);
-	#first chunk is <book> tag
-	$StartTag = shift @chunks;
-	$StartTag =~ s#\s+$##s;
-	$EndTag = $StartTag;
-	$EndTag =~ s#<#</#;
-	message(" document root tag: $StartTag\n", 7);
-	#wrap other chunks, get title, create division
-	my $first = 1;
-	foreach my $chunk (@chunks) {
-		#remove endtag from last chunk
-		$chunk =~ s#$EndTag\s*$##s;
-		$chunk = $StartTag . $split . $chunk . $EndTag;
-		my ($div) = ($chunk =~ m#<h1>(.+?)</h1>#);
-		$div =~ s#\s+#_#gs;
-		push @divs, $div;
-		#set div
-		my $divPath = $X->div($div);
-		if ($X->divExists()) {
-			badExit("$div in use") if ($X->divUse());
-			message(" -overwrite: $div\n", 5);
-		} else {
-			message(" -create: $div\n", 5);
-			#create div
-			$X->source($X->div("master"));
-			$X->target($X->div($div));
-			$X->divCopy();
-		}
-		#set division ticket to cont or 1
-		if ($first) {
-			$X->divTicket('-p_four 1');
-		} else {
-			$X->divTicket('-p_four 65535');
-		}
-		#write out chunk
-		my $file = path($divPath, $fileChunk);
-		$file->spew_utf8($chunk);
-		#toxsf
-		$X->source($fileChunk);
-		$X->divToxsf();
-		#reset first flag
-		$first = 0;
-	}
-	message("}\n", 5);
-	return(@divs);
-}
-
-#create the DA ticket needed for composing
-#-------------------------------------------------------------
-sub createDA {
-#-------------------------------------------------------------
-	my @divs = @_;
-	my $cnt = scalar(@divs);
-	message(">creating DA ticket {\n", 1);
-	message(" $cnt divisions", 7);
-	$X->DACreate(@divs);
-	message("}\n", 5);
 	return();
 }
 
@@ -246,47 +151,11 @@ sub executeRun {
 #-------------------------------------------------------------
 	my $file = $M->inputFile();
 	onStart($file);
-	my @divs = createDivs($file);
-	createDA(@divs);
-	composeDivs(@divs);
-	exportDivs(@divs);
+
 	onEnd();
 	return();
 }
 
-#export+transform list of divs and concatenate
-#-------------------------------------------------------------
-sub exportDivs {
-#-------------------------------------------------------------
-	my @divs = @_;
-	my $fileFromxsf = "fromxsf.xml";
-	my $fileTransform = "transform.xml";
-	my $fileFinal = "book.xml";
-	my $content;
-	my $file;
-	message(">exporting divs {\n", 1);
-	foreach my $div (@divs) {
-		message(" -$div\n");
-		message("   fromxsf:\n", 5);
-		$X->div($div);
-		$X->target($fileFromxsf);
-		$X->divFromxsf('-Rep -utf8');
-		message("   xychange:\n", 5);
-		$X->source($X->target());
-		$X->target($fileTransform);
-		$X->tables('transform');
-		$X->divXychange();
-		$file = path($X->div(), $fileTransform);
-		$content .= $file->slurp_utf8(); 
-	}
-	message("}\n", 5);
-	#write out book file
-	$file = path($X->job(), $fileFinal);
-	message(">writing book file\n", 1);
-	message(" $file\n", 5);
-	$file->spew_utf8($StartTag, $content, $EndTag);
-	return();
-}
 
 #-------------------------------------------------------------
 sub message {
