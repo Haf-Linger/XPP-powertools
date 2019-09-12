@@ -4,6 +4,7 @@
 **XPP-powertools** consists of 2 object oriented modules:
 - GuiTool.pm
 - XPPTool.pm
+
 These modules can be found In the **modules** folder.
 
 The _sampleJobTool.pl_ is a sample demonstrating the use of these modules to create a jobtool.
