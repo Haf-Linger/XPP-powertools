@@ -136,7 +136,15 @@ around 'div' => sub {
 sub _progName {
 #-------------------------------------------------------------
 	my $self = shift;
-    my $prog = basename($0, '.pl', '.exe');
+    my $prog;
+    if (defined $PerlApp::VERSION) {
+        #running under PerlApp, so get name of program
+        $prog = PerlApp::exe();
+    } else {
+        # Not running PerlAppified, so file should already exist
+        $prog = $0;
+    }
+    $prog = basename($prog, '.pl', '.exe');
     return($prog);
 }
 # builds default value for the $self->config()

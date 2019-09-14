@@ -126,8 +126,7 @@ sub _progName {
         # Not running PerlAppified, so file should already exist
         $prog = $0;
     }
-    $prog = basename($prog);
-    $prog =~ s/\..*$//;
+    $prog = basename($prog, '.pl', '.exe');
     return($prog);
 }
 

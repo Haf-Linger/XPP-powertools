@@ -335,7 +335,7 @@ sub onEnd {
 #-------------------------------------------------------------
 sub preFlight {
 #-------------------------------------------------------------
-	my $logFile = catfile($X->job(), $M->progname() . ".log");
+	my $logFile = catfile($X->job(), $X->progname() . ".log");
 	$X->logStart($logFile);
 
     #set debuglevel
